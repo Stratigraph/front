@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Data visualization</title>
+    <meta name="viewport" content="initial-scale=1.0">
+    <meta charset="utf-8">
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
+        #map {
+            height: 100%;
+        }
+
+        .controls {
+            color: aliceblue;
+            font-size: xx-large;
+        }
+
+        .controls label {
+            font-size: large;
+            margin-right: 1em;
+        }
+
+        .controls input[type="number"] {
+            width: 3em;
+        }
+
+    </style>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.4.0/css/font-awesome.min.css">
+</head>
+<body>
+<div id="header_div" class="controls">
+    <b id="prev" style="font-size: larger" class="fa fa-angle-double-left"></b>
+    <a id="date"></a>
+    <b id="next" style="font-size: larger" class="fa fa-angle-double-right"></b>
+</div>
+<div id="bottom" class="controls">
+    <form id="query_form" action="javascript:void(0);">
+        <table>
+            <tr>
+                <td><label for="min_mentions">min. mentions</label></td>
+                <td><input type="number" min="0" max="10000" id="min_mentions" value="50"></td>
+            </tr>
+            <tr>
+                <td><label for="min_sources">min.sources</label></td>
+                <td><input type="number" min="0" max="10000" id="min_sources" value="1"></td>
+            </tr>
+            <tr>
+                <td><label for="time_step">days / step</label></td>
+                <td><input type="number" id="time_step" value="30"></td>
+            </tr>
+            <tr>
+                <td><label for="date_from">date from</label></td>
+                <td><input type="date" id="date_from"></td>
+            </tr>
+            <tr>
+                <td><label for="date_to">date to</label></td>
+                <td><input type="date" id="date_to"></td>
+            </tr>
+            <tr>
+                <td><label for="search">Search keyword</label></td>
+                <td><input type="text" id="search"></td>
+            </tr>
+            <tr>
+                <td><input id="query_submit" type="submit" value="query"></td>
+            </tr>
+        </table>
+    </form>
+</div>
+
+<div id="map"></div>
+
+<script type="text/javascript">
+    function initMap() {
+        $('#date_to').val(new Date().toISOString().slice(0, 10));
+        $('#date_from').val(new Date(new Date().setTime(Date.now() - 365 * 24 * 60 * 60 * 1000)).toISOString().slice(0, 10));
+
+        // Create a map object and specify the DOM element for display.
+        var map = new google.maps.Map(document.getElementById('map'), {
+            center: {lat: 0, lng: 0},
+            scrollwheel: true,
+            streetViewControl: false,
+            rotateControl: false,
+            zoom: 3
+        });
+
+        var map_style = [{"featureType": "all", "elementType": "labels.text.fill", "stylers": [{"color": "#ffffff"}]}, {
+            "featureType": "all",
+            "elementType": "labels.text.stroke",
+            "stylers": [{"color": "#000000"}, {"lightness": 13}]
+        }, {"featureType": "administrative", "elementType": "geometry.fill", "stylers": [{"color": "#000000"}]}, {
+            "featureType": "administrative",
+            "elementType": "geometry.stroke",
+            "stylers": [{"color": "#144b53"}, {"lightness": 14}, {"weight": 1.4}]
+        }, {"featureType": "landscape", "elementType": "all", "stylers": [{"color": "#08304b"}]}, {
+            "featureType": "poi",
+            "elementType": "geometry",
+            "stylers": [{"color": "#0c4152"}, {"lightness": 5}]
+        }, {"featureType": "road.highway", "elementType": "geometry.fill", "stylers": [{"color": "#000000"}]}, {
+            "featureType": "road.highway",
+            "elementType": "geometry.stroke",
+            "stylers": [{"color": "#0b434f"}, {"lightness": 25}]
+        }, {"featureType": "road.arterial", "elementType": "geometry.fill", "stylers": [{"color": "#000000"}]}, {
+            "featureType": "road.arterial",
+            "elementType": "geometry.stroke",
+            "stylers": [{"color": "#0b3d51"}, {"lightness": 16}]
+        }, {"featureType": "road.local", "elementType": "geometry", "stylers": [{"color": "#000000"}]}, {
+            "featureType": "transit",
+            "elementType": "all",
+            "stylers": [{"color": "#146474"}]
+        }, {"featureType": "water", "elementType": "all", "stylers": [{"color": "#021019"}]}];
+
+        map.setOptions({styles: map_style});
+
+        var heat_data = [];
+        var heat_index = 0;
+        var heat_run = true;
+
+        var heatmap = new google.maps.visualization.HeatmapLayer({
+            data: []
+        });
+        heatmap.setMap(map);
+        heatmap.set('radius', 23);
+
+        map.controls[google.maps.ControlPosition.TOP_RIGHT].push(document.getElementById('header_div'));
+        map.controls[google.maps.ControlPosition.LEFT_CENTER].push(document.getElementById('bottom'));
+
+        function renderNext() {
+            if (heat_data[heat_index] == undefined) {
+                heat_index = 0
+            }
+
+            var data = heat_data[heat_index];
+            var heatmapData = [];
+
+            data['data'].forEach(function (el) {
+                heatmapData.push({
+                    location: new google.maps.LatLng(el['lat'], el['lng']),
+                    weight: Math.log(el['sum']) ^ 2
+                })
+            });
+
+            $('#date').text(data['date']);
+
+            heatmap.setData(heatmapData);
+            heat_index++;
+        }
+
+        function render() {
+            if (!heat_run) {
+                return;
+            }
+            renderNext();
+        }
+
+
+        var heatmapData = [];
+
+        function get_heat_data() {
+            var req_url = '/api/data?';
+
+            ['time_step', 'min_mentions', 'date_from', 'date_to', 'min_sources', 'search'].forEach(function (key) {
+                req_url += key + "=" + $("#" + key).val() + "&"
+            });
+
+            console.log(req_url);
+
+
+            $.getJSON(req_url, function (data) {
+                if (data.status == 202) {
+                    alert("Unfortunately, we don't have pregenerated data, what you require. But, we will generate these results as soon as possible :)")
+                } else {
+                    $.getJSON(data.dataUrl, function (data) {
+                        if (heat_data.length == 0) {
+                            setInterval(render, 500);
+                        }
+                        heat_data = data;
+                        renderNext();
+                        heat_run = true;
+                    });
+                }
+            });
+        }
+
+        get_heat_data();
+
+        $("#date").click(function () {
+            heat_run = !heat_run;
+        });
+
+        $("#prev").click(function () {
+            heat_index -= 2;
+            renderNext();
+        });
+
+        $("#next").click(function () {
+            heat_index++;
+            renderNext();
+        });
+
+        $("#query_form").submit(function () {
+            get_heat_data();
+        });
+
+    }
+</script>
+<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
+<script type="text/javascript" src="https://storage.googleapis.com/fi-edu-cdn/js/markerclusterer.js"></script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCuXUdz6Qjt4bPTvS04kjBQkfjZrxMc2sA&libraries=visualization&callback=initMap"></script>
+
+<script>
+    (function (i, s, o, g, r, a, m) {
+        i['GoogleAnalyticsObject'] = r;
+        i[r] = i[r] || function () {
+                    (i[r].q = i[r].q || []).push(arguments)
+                }, i[r].l = 1 * new Date();
+        a = s.createElement(o),
+                m = s.getElementsByTagName(o)[0];
+        a.async = 1;
+        a.src = g;
+        m.parentNode.insertBefore(a, m)
+    })(window, document, 'script', '//www.google-analytics.com/analytics.js', 'ga');
+
+    ga('create', 'UA-70315902-1', 'auto');
+    ga('send', 'pageview');
+
+</script>
+
+</body>
+</html>
