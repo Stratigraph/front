@@ -3,11 +3,23 @@ import json
 import datetime
 import hashlib
 import itsdangerous
+import configparser
 import mongoengine
 from mongoengine import connect
 
+# parsing config
+config = configparser.RawConfigParser()
+config.read("conf.ini")
+conf = {}
+
+for section in config.sections():
+    conf[section] = {}
+    for pair in config.items(section):
+        key, value = pair
+        conf[section][key] = value
+
 connect("gdelt")
-s = itsdangerous.Signer("ee09f5d40551658fe6a3c52f3a9ede9769604fce1986a3af0a8a05694f32")
+s = itsdangerous.Signer(conf['shared']['sign_key'])
 
 
 class GdeltQueries(mongoengine.Document):
@@ -24,6 +36,12 @@ def date_handler(obj):
 
 
 def generate_hash(args, sha1=False):
+    """
+    generate "slug id" or it's SHA1 hash
+    :param args:
+    :param sha1:
+    :return:
+    """
     res = ''
     for key in sorted(args):
         res += str(date_handler(args[key])) + '_'
@@ -93,7 +111,7 @@ class DataResource:
                 resp.status = falcon.HTTP_200
                 resp.body = json.dumps({
                     'status': 200,
-                    'dataUrl': 'https://storage.googleapis.com/fi-edu-cdn/gdelt-results/json/%s.json' % gdelt_query.slug
+                    'dataUrl': conf['shared']['base_url'] + 'gdelt-results/json/%s.json' % gdelt_query.slug
                 })
 
 
@@ -132,7 +150,7 @@ class HistoryResource:
 class S4Resource:
     def on_post(self, req, resp):
         print("get file:")
-        payload = json.loads(s.unsign(req.stream.read()))
+        payload = json.loads(str(s.unsign(req.stream.read())))
         f = open('static/results/' + payload['slug'], 'w')
         f.write(json.dumps(payload['data']))
         f.close()
